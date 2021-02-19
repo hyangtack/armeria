@@ -69,6 +69,8 @@ public final class RouteBuilder {
 
     private final List<RoutingPredicate<HttpHeaders>> headerPredicates = new ArrayList<>();
 
+    private boolean setDeferredException = true;
+
     RouteBuilder() {}
 
     /**
@@ -414,6 +416,15 @@ public final class RouteBuilder {
     }
 
     /**
+     * Sets whether the {@link Route} would set a deferred exception to a {@link RoutingContext} instance.
+     * Currently, it is used only when configuring {@link Route}s to fallback services.
+     */
+    RouteBuilder setDeferredExceptionToRoutingContext(boolean setDeferredException) {
+        this.setDeferredException = setDeferredException;
+        return this;
+    }
+
+    /**
      * Returns a newly-created {@link Route} based on the properties of this builder.
      */
     public Route build() {
@@ -424,12 +435,13 @@ public final class RouteBuilder {
         }
         final Set<HttpMethod> pathMethods = methods.isEmpty() ? HttpMethod.knownMethods() : methods;
         return new DefaultRoute(pathMapping, pathMethods, consumes, produces,
-                                paramPredicates, headerPredicates);
+                                paramPredicates, headerPredicates, setDeferredException);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(pathMapping, methods, consumes, produces);
+        return Objects.hash(pathMapping, methods, consumes, produces,
+                            paramPredicates, headerPredicates, setDeferredException);
     }
 
     @Override
@@ -448,7 +460,8 @@ public final class RouteBuilder {
                consumes.equals(that.consumes) &&
                produces.equals(that.produces) &&
                paramPredicates.equals(that.paramPredicates) &&
-               headerPredicates.equals(that.headerPredicates);
+               headerPredicates.equals(that.headerPredicates) &&
+               setDeferredException == that.setDeferredException;
     }
 
     @Override
@@ -460,6 +473,7 @@ public final class RouteBuilder {
                           .add("produces", produces)
                           .add("paramPredicates", paramPredicates)
                           .add("headerPredicates", headerPredicates)
+                          .add("setDeferredException", setDeferredException)
                           .toString();
     }
 

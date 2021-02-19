@@ -47,10 +47,13 @@ final class DefaultRoute implements Route {
     private final int hashCode;
     private final int complexity;
 
+    private final boolean setDeferredException;
+
     DefaultRoute(PathMapping pathMapping, Set<HttpMethod> methods,
                  Set<MediaType> consumes, Set<MediaType> produces,
                  List<RoutingPredicate<QueryParams>> paramPredicates,
-                 List<RoutingPredicate<HttpHeaders>> headerPredicates) {
+                 List<RoutingPredicate<HttpHeaders>> headerPredicates,
+                 boolean setDeferredException) {
         this.pathMapping = requireNonNull(pathMapping, "pathMapping");
         checkArgument(!requireNonNull(methods, "methods").isEmpty(), "methods is empty.");
         this.methods = Sets.immutableEnumSet(methods);
@@ -58,6 +61,7 @@ final class DefaultRoute implements Route {
         this.produces = ImmutableSet.copyOf(requireNonNull(produces, "produces"));
         this.paramPredicates = ImmutableList.copyOf(requireNonNull(paramPredicates, "paramPredicates"));
         this.headerPredicates = ImmutableList.copyOf(requireNonNull(headerPredicates, "headerPredicates"));
+        this.setDeferredException = setDeferredException;
 
         hashCode = Objects.hash(this.pathMapping, this.methods, this.consumes, this.produces,
                                 this.paramPredicates, this.headerPredicates);
@@ -91,10 +95,11 @@ final class DefaultRoute implements Route {
             }
             // '415 Unsupported Media Type' and '406 Not Acceptable' is more specific than
             // '405 Method Not Allowed'. So 405 would be set if there is no status code set before.
-            if (routingCtx.deferredStatusException() == null) {
-                routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.METHOD_NOT_ALLOWED));
+            if (setDeferredException) {
+                if (routingCtx.deferredStatusException() == null) {
+                    routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.METHOD_NOT_ALLOWED));
+                }
             }
-
             return emptyOrCorsPreflightResult(routingCtx, builder);
         }
 
@@ -115,7 +120,9 @@ final class DefaultRoute implements Route {
                 if (isRouteDecorator) {
                     return RoutingResult.empty();
                 }
-                routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.UNSUPPORTED_MEDIA_TYPE));
+                if (setDeferredException) {
+                    routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.UNSUPPORTED_MEDIA_TYPE));
+                }
                 return emptyOrCorsPreflightResult(routingCtx, builder);
             }
         }
@@ -157,7 +164,9 @@ final class DefaultRoute implements Route {
                 if (isRouteDecorator) {
                     return RoutingResult.empty();
                 }
-                routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.NOT_ACCEPTABLE));
+                if (setDeferredException) {
+                    routingCtx.deferStatusException(HttpStatusException.of(HttpStatus.NOT_ACCEPTABLE));
+                }
                 return emptyOrCorsPreflightResult(routingCtx, builder);
             }
         }
@@ -189,6 +198,11 @@ final class DefaultRoute implements Route {
     private static boolean isAnyType(MediaType contentType) {
         // Ignores all parameters including the quality factor.
         return "*".equals(contentType.type()) || "*".equals(contentType.subtype());
+    }
+
+    @Override
+    public PathMapping pathMapping() {
+        return pathMapping;
     }
 
     @Override
@@ -252,11 +266,24 @@ final class DefaultRoute implements Route {
                consumes.equals(that.consumes) &&
                produces.equals(that.produces) &&
                headerPredicates.equals(that.headerPredicates) &&
-               paramPredicates.equals(that.paramPredicates);
+               paramPredicates.equals(that.paramPredicates) &&
+               setDeferredException == that.setDeferredException;
     }
 
     @Override
     public String toString() {
         return patternString();
+    }
+
+    @Override
+    public RouteBuilder toBuilder() {
+        return Route.builder()
+                    .pathMapping(pathMapping)
+                    .methods(methods)
+                    .consumes(consumes)
+                    .produces(produces)
+                    .matchesParams(paramPredicates)
+                    .matchesHeaders(headerPredicates)
+                    .setDeferredExceptionToRoutingContext(setDeferredException);
     }
 }
