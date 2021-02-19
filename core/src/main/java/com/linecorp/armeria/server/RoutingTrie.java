@@ -77,7 +77,14 @@ final class RoutingTrie<V> {
      * Returns the list of values which is mapped to the given {@code path}.
      */
     List<V> find(String path) {
-        final Node<V> node = findNode(path, false);
+        return find(path, node -> node);
+    }
+
+    /**
+     * Returns the list of values which is mapped to the given {@code path}.
+     */
+    List<V> find(String path, NodeFilter<V> filter) {
+        final Node<V> node = findNode(path, false, filter);
         return node == null ? ImmutableList.of() : node.values;
     }
 
@@ -85,7 +92,14 @@ final class RoutingTrie<V> {
      * Returns the list of values which is mapped to the given {@code path}.
      */
     List<V> findAll(String path) {
-        return findAllNodes(path, false)
+        return findAll(path, node -> node);
+    }
+
+    /**
+     * Returns the list of values which is mapped to the given {@code path}.
+     */
+    List<V> findAll(String path, NodeFilter<V> filter) {
+        return findAllNodes(path, false, filter)
                 .stream()
                 .flatMap(n -> n.values.stream())
                 .collect(toImmutableList());
@@ -97,7 +111,7 @@ final class RoutingTrie<V> {
     @Nullable
     @VisibleForTesting
     Node<V> findNode(String path) {
-        return findNode(path, false);
+        return findNode(path, false, node -> node);
     }
 
     /**
@@ -106,9 +120,9 @@ final class RoutingTrie<V> {
      */
     @Nullable
     @VisibleForTesting
-    Node<V> findNode(String path, boolean exact) {
+    Node<V> findNode(String path, boolean exact, NodeFilter<V> filter) {
         requireNonNull(path, "path");
-        return findFirstNode(root, path, 0, exact, new IntHolder());
+        return findFirstNode(root, path, 0, exact, new IntHolder(), filter);
     }
 
     /**
@@ -116,8 +130,9 @@ final class RoutingTrie<V> {
      * to visit the children of the given node. Returns {@code null} if there is no {@link Node} to find.
      */
     @Nullable
-    private Node<V> findFirstNode(Node<V> node, String path, int begin, boolean exact, IntHolder nextHolder) {
-        final Node<V> checked = checkNode(node, path, begin, exact, nextHolder);
+    private Node<V> findFirstNode(Node<V> node, String path, int begin, boolean exact, IntHolder nextHolder,
+                                  NodeFilter<V> filter) {
+        final Node<V> checked = checkNode(node, path, begin, exact, nextHolder, filter);
         if (checked != continueWalking()) {
             return checked;
         }
@@ -131,14 +146,14 @@ final class RoutingTrie<V> {
         final int next = nextHolder.value;
         Node<V> child = node.children.get(path.charAt(next));
         if (child != null) {
-            final Node<V> found = findFirstNode(child, path, next, exact, nextHolder);
+            final Node<V> found = findFirstNode(child, path, next, exact, nextHolder, filter);
             if (found != null) {
                 return found;
             }
         }
         child = node.parameterChild;
         if (child != null) {
-            final Node<V> found = findFirstNode(child, path, next, exact, nextHolder);
+            final Node<V> found = findFirstNode(child, path, next, exact, nextHolder, filter);
             if (found != null) {
                 return found;
             }
@@ -146,16 +161,16 @@ final class RoutingTrie<V> {
         return node.catchAllChild;
     }
 
-    private List<Node<V>> findAllNodes(String path, boolean exact) {
+    private List<Node<V>> findAllNodes(String path, boolean exact, NodeFilter<V> filter) {
         final ImmutableList.Builder<Node<V>> accumulator = ImmutableList.builder();
-        findAllNodes(root, path, 0, exact, accumulator, new IntHolder());
+        findAllNodes(root, path, 0, exact, accumulator, new IntHolder(), filter);
         return accumulator.build();
     }
 
     private void findAllNodes(Node<V> node, String path, int begin, boolean exact,
                               ImmutableList.Builder<Node<V>> accumulator,
-                              IntHolder nextHolder) {
-        final Node<V> checked = checkNode(node, path, begin, exact, nextHolder);
+                              IntHolder nextHolder, NodeFilter<V> filter) {
+        final Node<V> checked = checkNode(node, path, begin, exact, nextHolder, filter);
         if (checked != continueWalking()) {
             if (checked != null) {
                 accumulator.add(checked);
@@ -171,11 +186,11 @@ final class RoutingTrie<V> {
         }
         child = node.parameterChild;
         if (child != null) {
-            findAllNodes(child, path, next, exact, accumulator, nextHolder);
+            findAllNodes(child, path, next, exact, accumulator, nextHolder, filter);
         }
         child = node.children.get(path.charAt(next));
         if (child != null) {
-            findAllNodes(child, path, next, exact, accumulator, nextHolder);
+            findAllNodes(child, path, next, exact, accumulator, nextHolder, filter);
         }
     }
 
@@ -185,7 +200,8 @@ final class RoutingTrie<V> {
      * Returns {@link #continueWalking()} if the given {@code path} has to visit {@link Node#children}.
      */
     @Nullable
-    private Node<V> checkNode(Node<V> node, String path, int begin, boolean exact, IntHolder next) {
+    private Node<V> checkNode(Node<V> node, String path, int begin, boolean exact, IntHolder next,
+                              NodeFilter<V> filter) {
         switch (node.type) {
             case EXACT:
                 final int len = node.path.length();
@@ -199,7 +215,7 @@ final class RoutingTrie<V> {
                     // if it exists. But if 'exact' is true, we just return this node to make caller
                     // have the exact matched node.
                     if (exact || !node.values.isEmpty() || node.catchAllChild == null) {
-                        return node;
+                        return filter.apply(node);
                     }
 
                     return node.catchAllChild;
@@ -211,11 +227,11 @@ final class RoutingTrie<V> {
                 final int delim = path.indexOf('/', begin);
                 if (delim < 0) {
                     // No more delimiter.
-                    return node;
+                    return filter.apply(node);
                 }
                 if (path.length() == delim + 1) {
                     final Node<V> trailingSlashNode = node.children.get('/');
-                    return trailingSlashNode != null ? trailingSlashNode : node;
+                    return filter.apply(trailingSlashNode != null ? trailingSlashNode : node);
                 }
                 next.value = delim;
                 break;
@@ -299,5 +315,14 @@ final class RoutingTrie<V> {
 
     private static class IntHolder {
         int value;
+    }
+
+    @FunctionalInterface
+    interface NodeFilter<V> {
+        /**
+         * Returns {@code null} if the node is not acceptable.
+         */
+        @Nullable
+        Node<V> apply(Node<V> node);
     }
 }

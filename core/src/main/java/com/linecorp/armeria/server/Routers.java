@@ -32,6 +32,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -44,7 +45,11 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.Lists;
+
+import com.linecorp.armeria.server.RoutingTrie.Node;
+import com.linecorp.armeria.server.RoutingTrie.NodeFilter;
 
 /**
  * A factory that creates a {@link Router} instance.
@@ -329,6 +334,51 @@ public final class Routers {
         return result;
     }
 
+    /**
+     * Finds the most suitable service from the given {@link ServiceConfig} list.
+     */
+    private static <V> Routed<V> findBest(List<Routed<V>> routes) {
+        Routed<V> result = Routed.empty();
+        for (Routed<V> route : routes) {
+            final RoutingResult routingResult = route.routingResult();
+            if (routingResult.isPresent()) {
+                //
+                // The services are sorted as follows:
+                //
+                // 1) the service with method and media type negotiation
+                //    (consumable and producible)
+                // 2) the service with method and producible media type negotiation
+                // 3) the service with method and consumable media type negotiation
+                // 4) the service with method negotiation
+                // 5) the other services (in a registered order)
+                //
+                // 1) and 2) may produce a score between the lowest and the highest because they should
+                // negotiate the produce type with the value of 'Accept' header.
+                // 3), 4) and 5) always produces the lowest score.
+                //
+
+                // Found the best matching.
+                if (routingResult.hasHighestScore()) {
+                    result = route;
+                    break;
+                }
+
+                // We have still a chance to find a better matching.
+                if (result.isPresent()) {
+                    if (routingResult.score() > result.routingResult().score()) {
+                        // Replace the candidate with the new one only if the score is better.
+                        // If the score is same, we respect the order of service registration.
+                        result = route;
+                    }
+                } else {
+                    // Keep the result as a candidate.
+                    result = route;
+                }
+            }
+        }
+        return result;
+    }
+
     private static <V> List<Routed<V>> findAll(RoutingContext routingCtx, List<V> values,
                                                Function<V, Route> routeResolver,
                                                boolean isRouteDecorator) {
@@ -358,18 +408,47 @@ public final class Routers {
 
         @Override
         public Routed<V> find(RoutingContext routingCtx) {
-            return findBest(routingCtx, trie.find(routingCtx.path()), routeResolver);
+            final RoutingNodeFilter filter = new RoutingNodeFilter(routingCtx);
+            trie.find(routingCtx.path(), filter);
+            return findBest(filter.routeCollector.build());
         }
 
         @Override
         public List<Routed<V>> findAll(RoutingContext routingCtx) {
-            return Routers.findAll(routingCtx, trie.findAll(routingCtx.path()),
-                                   routeResolver, isRouteDecorator);
+            final RoutingNodeFilter filter = new RoutingNodeFilter(routingCtx);
+            trie.findAll(routingCtx.path(), filter);
+            return filter.routeCollector.build();
         }
 
         @Override
         public void dump(OutputStream output) {
             trie.dump(output);
+        }
+
+        private final class RoutingNodeFilter implements NodeFilter<V> {
+            private final RoutingContext routingCtx;
+            private final ImmutableList.Builder<Routed<V>> routeCollector = new Builder<>();
+
+            public RoutingNodeFilter(RoutingContext routingCtx) {
+                this.routingCtx = routingCtx;
+            }
+
+            @Nullable
+            @Override
+            public Node<V> apply(Node<V> node) {
+                final List<Routed<V>> list = node.values.stream().map(value -> {
+                    final Route route = routeResolver.apply(value);
+                    final RoutingResult result = route.apply(routingCtx, isRouteDecorator);
+                    return result.isPresent() ? Routed.of(route, result, value) : null;
+                }).filter(Objects::nonNull).collect(toImmutableList());
+
+                if (list.isEmpty()) {
+                    // Not acceptable node.
+                    return null;
+                }
+                routeCollector.addAll(list);
+                return node;
+            }
         }
     }
 

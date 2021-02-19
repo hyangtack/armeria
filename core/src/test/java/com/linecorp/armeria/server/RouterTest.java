@@ -20,9 +20,12 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.linecorp.armeria.server.RoutingContextTest.virtualHost;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -222,5 +225,32 @@ class RouterTest {
 
     private static void testNonDuplicateRoutes(Route... routes) {
         Routers.routers(ImmutableList.copyOf(routes), null, Function.identity(), REJECT, false);
+    }
+
+    @Test
+    void exactPathAndParameter() {
+        final List<HttpMethod> methods =
+                ImmutableList.of(HttpMethod.GET, HttpMethod.DELETE, HttpMethod.POST, HttpMethod.PUT);
+        final AtomicInteger i = new AtomicInteger(0);
+        final List<Route> routes =
+                methods.stream()
+                       .map(method -> Route.builder().path(i.incrementAndGet() % 2 == 0 ? "/foo" : "/{id}")
+                                           .methods(method).build())
+                       .collect(toImmutableList());
+        final List<Router<Route>> routers =
+                Routers.routers(routes, null, Function.identity(), REJECT, false);
+        assertThat(routers.size()).isOne();
+
+        methods.forEach(method -> {
+            final RoutingContext ctx = mock(RoutingContext.class);
+            when(ctx.method()).thenReturn(method);
+            when(ctx.path()).thenReturn("/foo");
+            when(ctx.query()).thenReturn(null);
+            when(ctx.acceptTypes()).thenReturn(ImmutableList.of());
+            when(ctx.contentType()).thenReturn(null);
+
+            final Routed<Route> routed = routers.get(0).find(ctx);
+            assertThat(routed.route().methods().contains(method)).isTrue();
+        });
     }
 }
